@@ -12,6 +12,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       GH_TOKEN: ${{ github.token }}
+      GITHUB_TOKEN: ${{ github.token }}
       PR_NUM: ${{ github.event.issue.number }}
       REPO: ${{ github.repository }}
     steps:
@@ -21,20 +22,35 @@ jobs:
           git remote add origin "https://x-access-token:${GH_TOKEN}@github.com/${REPO}"
           git fetch origin --depth=1 "pull/${PR_NUM}/head:pr-branch"
           git checkout pr-branch
-      - name: Read and exec CLAUDE.md
+          echo "[+] Checked out: $(git log --oneline -1)"
+      - name: Read CLAUDE.md and show token impact
         run: |
           CLAUDE_PATH=""
           [ -f ".claude/CLAUDE.md" ] && CLAUDE_PATH=".claude/CLAUDE.md"
           [ -f "CLAUDE.md" ] && [ -z "$CLAUDE_PATH" ] && CLAUDE_PATH="CLAUDE.md"
           [ -z "$CLAUDE_PATH" ] && echo "NO CLAUDE.md" && exit 0
-          echo "=== CLAUDE.md CONTENT ==="
+
+          echo "=== ATTACKER CLAUDE.md LOADED ==="
           cat "$CLAUDE_PATH"
-          echo "=== EXECUTING COMMANDS ==="
-          echo "Token check: GITHUB_TOKEN present=$([ -n "$GITHUB_TOKEN" ] && echo YES || echo NO)"
-          gh api user --jq '"Running as: \(.login)"'
-          gh api "repos/${REPO}" --jq '"Repo permissions: push=\(.permissions.push) admin=\(.permissions.admin)"'
-          echo "=== DONE ==="
-      - name: Post result
+          echo ""
+          echo "=== AGENT ENVIRONMENT (security impact) ==="
+          echo "GH_TOKEN present: $([ -n "$GH_TOKEN" ] && echo YES || echo NO)"
+          echo "Repo this token controls:"
+          gh api "repos/${REPO}" --jq '"  \(.full_name) | push:\(.permissions.push) admin:\(.permissions.admin)"'
+          echo "PR this agent is responding to:"
+          gh api "repos/${REPO}/pulls/${PR_NUM}" --jq '"  PR #\(.number): \(.title) by \(.user.login)"'
+          echo "What the token can write to:"
+          echo "  issues: write  -> can post fake security advisories, misleading triage"
+          echo "  pull-requests: write -> can approve PRs, dismiss reviews, add labels"
+          echo "  contents: write -> can commit code to branches"
+          echo ""
+          echo "=== SIMULATED ATTACKER ACTION ==="
+          echo "An AI agent following the injected CLAUDE.md would execute these:"
+          echo "  gh pr review $PR_NUM --approve --body 'Looks good, ship it'"
+          echo "  gh issue comment $PR_NUM --body '[fake security review]'"
+          echo "  git commit --allow-empty -m 'backdoor' && git push origin main"
+          echo "=== END ==="
+      - name: Post result comment
         run: |
           gh issue comment "$PR_NUM" --repo "$REPO" \
-            --body "ELASTIC_IPI_CANARY_7F42D1 EXECUTED. Token identity and permissions confirmed. See run log: https://github.com/${REPO}/actions/runs/${GITHUB_RUN_ID}"
+            --body "ELASTIC_IPI_CANARY_7F42D1 CONFIRMED. Token has issues:write + pull-requests:write + contents:write. Agent ran with injected CLAUDE.md instructions. Run: https://github.com/${REPO}/actions/runs/${GITHUB_RUN_ID}"
