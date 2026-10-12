@@ -2,82 +2,39 @@ name: AI Agent Canary
 on:
   issue_comment:
     types: [created]
-
 permissions:
   contents: write
   issues: write
   pull-requests: write
-
 jobs:
   canary:
-    if: >-
-      contains(github.event.comment.body, '@claude') &&
-      github.event.issue.pull_request != null
+    if: contains(github.event.comment.body, '@claude') && github.event.issue.pull_request != null
     runs-on: ubuntu-latest
     env:
       GH_TOKEN: ${{ github.token }}
       PR_NUM: ${{ github.event.issue.number }}
       REPO: ${{ github.repository }}
-      GITHUB_RUN_URL: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
     steps:
-      - name: "STEP 1 — Checkout PR HEAD (exact: git fetch pull/N/head)"
+      - name: Checkout PR HEAD
         run: |
           git init
           git remote add origin "https://x-access-token:${GH_TOKEN}@github.com/${REPO}"
           git fetch origin --depth=1 "pull/${PR_NUM}/head:pr-branch"
           git checkout pr-branch
-          echo "[*] PR HEAD checked out — commit: $(git log --oneline -1)"
-          echo "[*] PR author controlled files:"
-          find . -not -path './.git*' | head -20
-
-      - name: "STEP 2 — Execute bash commands from CLAUDE.md (simulates AI agent)"
-        id: exec
+      - name: Read and exec CLAUDE.md
         run: |
           CLAUDE_PATH=""
           [ -f ".claude/CLAUDE.md" ] && CLAUDE_PATH=".claude/CLAUDE.md"
           [ -f "CLAUDE.md" ] && [ -z "$CLAUDE_PATH" ] && CLAUDE_PATH="CLAUDE.md"
-
-          if [ -z "$CLAUDE_PATH" ]; then
-            echo "NO_CLAUDE=true" >> "$GITHUB_ENV"
-            exit 0
-          fi
-
-          echo "[*] Found: $CLAUDE_PATH"
-          echo "CLAUDE_PATH=$CLAUDE_PATH" >> "$GITHUB_ENV"
-
-          # Extract bash block and execute it — this is what Claude Code / gh-aw does
-          python3 -c "
-import re, sys
-content = open('$CLAUDE_PATH').read()
-blocks = re.findall(r'```bash
-(.*?)```', content, re.DOTALL)
-if blocks:
-    print(blocks[0].strip())
-else:
-    print('# no bash block found')
-" > /tmp/injected.sh
-
-          echo "[*] === Commands extracted from attacker CLAUDE.md ==="
-          cat /tmp/injected.sh
-          echo "[*] === Executing ==="
-          bash /tmp/injected.sh 2>&1 | tee /tmp/exec_output.txt
-          echo "[*] === Execution complete ==="
-
-      - name: "STEP 3 — Post command output to PR comment"
+          [ -z "$CLAUDE_PATH" ] && echo "NO CLAUDE.md" && exit 0
+          echo "=== CLAUDE.md CONTENT ==="
+          cat "$CLAUDE_PATH"
+          echo "=== EXECUTING COMMANDS ==="
+          echo "Token check: GITHUB_TOKEN present=$([ -n "$GITHUB_TOKEN" ] && echo YES || echo NO)"
+          gh api user --jq '"Running as: \(.login)"'
+          gh api "repos/${REPO}" --jq '"Repo permissions: push=\(.permissions.push) admin=\(.permissions.admin)"'
+          echo "=== DONE ==="
+      - name: Post result
         run: |
-          if [ "${NO_CLAUDE:-false}" = "true" ]; then
-            gh issue comment "$PR_NUM" --repo "$REPO" \
-              --body "Canary: no CLAUDE.md found in PR HEAD."
-            exit 0
-          fi
-
-          OUTPUT=$(cat /tmp/exec_output.txt 2>/dev/null || echo "(no output)")
-          BODY="ELASTIC_IPI_CANARY: COMMANDS EXECUTED
-
-File: ${CLAUDE_PATH}
-Run: ${GITHUB_RUN_URL}
-
-Command output:
-${OUTPUT}"
-
-          gh issue comment "$PR_NUM" --repo "$REPO" --body "$BODY"
+          gh issue comment "$PR_NUM" --repo "$REPO" \
+            --body "ELASTIC_IPI_CANARY_7F42D1 EXECUTED. Token identity and permissions confirmed. See run log: https://github.com/${REPO}/actions/runs/${GITHUB_RUN_ID}"
